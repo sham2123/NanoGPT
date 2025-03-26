@@ -59,29 +59,46 @@ def estimate_loss():
     model.train()
     return out
 
-# Define the model components
+
 class Head(nn.Module):
-    """ one head of self-attention """
+    """One head of self-attention - processes one 'view' of the input"""
     def __init__(self, head_size):
         super().__init__()
         self.key = nn.Linear(n_embd, head_size, bias=False)
         self.query = nn.Linear(n_embd, head_size, bias=False)
         self.value = nn.Linear(n_embd, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
-        self.dropout = nn.Dropout(dropout)
+        
+        # Regularization: randomly zeros out some connections during training
+        self.dropout = nn.Dropout(dropout)  
 
     def forward(self, x):
-        B, T, C = x.shape
-        k = self.key(x)   # (B,T,head_size)
-        q = self.query(x) # (B,T,head_size)
-        wei = q @ k.transpose(-2, -1) * (k.shape[-1] ** -0.5)  # (B, T, T)
-        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
-        wei = F.softmax(wei, dim=-1)
+        B, T, C = x.shape  # Batch size, Sequence length, Embedding dimension
+        
+        # Step 1: Create Q, K, V
+        k = self.key(x)    # (B,T,head_size) "What do I know?"
+        q = self.query(x)  # (B,T,head_size) "What am I looking for?"
+        
+        # Step 2: Compute attention scores ("affinities")
+        wei = q @ k.transpose(-2, -1) * (k.shape[-1] ** -0.5)  # (B,T,T)
+        # Matrix multiply Q*K^T, scaled by sqrt(head_size)
+        
+        # Step 3: Apply mask (for decoder)
+        wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf')) 
+        # Makes future positions have -inf score
+        
+        # Step 4: Softmax to get probabilities (0-1)
+        wei = F.softmax(wei, dim=-1)  # (B,T,T)
+        
+        # Step 5: Dropout for regularization
         wei = self.dropout(wei)
-        v = self.value(x)
-        out = wei @ v  # (B, T, head_size)
+        
+        # Step 6: Weighted sum of values
+        v = self.value(x)  # (B,T,head_size) "Actual content"
+        out = wei @ v      # (B,T,head_size)
+        
         return out
-
+    
 class MultiHeadAttention(nn.Module):
     """ multiple heads of self-attention in parallel """
     def __init__(self, num_heads, head_size):
@@ -94,6 +111,7 @@ class MultiHeadAttention(nn.Module):
         out = torch.cat([h(x) for h in self.heads], dim=-1)
         out = self.dropout(self.proj(out))
         return out
+
 
 class FeedForward(nn.Module):
     """ a simple linear layer followed by a non-linearity """
